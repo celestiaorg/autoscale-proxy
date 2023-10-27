@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/andybalholm/brotli"
 )
 
 var (
@@ -28,6 +30,9 @@ func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain
 	replacedBody := strings.ReplaceAll(body, fullReplace, fullOriginal)
 	buffer.Reset()
 	buffer.WriteString(replacedBody)
+
+	// Logging for troubleshooting
+	debugLog.Printf("fullReplace: %s, fullOriginal: %s", fullReplace, fullOriginal)
 }
 
 func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Request) (int, map[string]string, error) {
@@ -52,7 +57,14 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		}
 	}
 
-	io.Copy(buffer, resp.Body)
+	if resp.Header.Get("Content-Encoding") == "br" {
+		// Decompress Brotli data
+		decompressedData := brotli.NewReader(resp.Body)
+		io.Copy(buffer, decompressedData)
+	} else {
+		io.Copy(buffer, resp.Body)
+	}
+
 	return resp.StatusCode, headers, nil
 }
 
@@ -85,6 +97,10 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(key, value)
 		}
 		w.WriteHeader(backupStatusCode)
+		// If the original response was Brotli-compressed, recompress the data
+		if headers["Content-Encoding"] == "br" {
+			buffer = compressBrotli(buffer)
+		}
 		io.Copy(w, backupBuffer)
 		return
 	}
@@ -94,7 +110,19 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(key, value)
 	}
 	w.WriteHeader(statusCode)
+	// If the original response was Brotli-compressed, recompress the data
+	if headers["Content-Encoding"] == "br" {
+		buffer = compressBrotli(buffer)
+	}
 	io.Copy(w, buffer)
+}
+
+func compressBrotli(buffer *bytes.Buffer) *bytes.Buffer {
+	var compressedData bytes.Buffer
+	writer := brotli.NewWriterLevel(&compressedData, brotli.DefaultCompression)
+	io.Copy(writer, buffer)
+	writer.Close()
+	return &compressedData
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {

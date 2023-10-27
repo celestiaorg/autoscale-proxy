@@ -80,15 +80,15 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	buffer := new(bytes.Buffer)
 	backupBuffer := new(bytes.Buffer)
 
-	debugLog.Printf("Proxying request to %s", fullSubdomain+".statescale")
-	statusCode, headers, err := proxyRequest(fullSubdomain+".statescale", r.RequestURI, buffer, r)
+	debugLog.Printf("Proxying request to %s", fullSubdomain+"-statescale")
+	statusCode, headers, err := proxyRequest(fullSubdomain+"-statescale", r.RequestURI, buffer, r)
 	debugLog.Printf("Received status code %d", statusCode)
 	if err != nil || statusCode >= 400 {
-		debugLog.Printf("Proxying request to %s", fullSubdomain+".snapscale")
-		backupStatusCode, backupHeaders, _ := proxyRequest(fullSubdomain+".snapscale", r.RequestURI, backupBuffer, r)
+		debugLog.Printf("Proxying request to %s", fullSubdomain+"-snapscale")
+		backupStatusCode, backupHeaders, _ := proxyRequest(fullSubdomain+"-snapscale", r.RequestURI, backupBuffer, r)
 		debugLog.Printf("Received status code %d", backupStatusCode)
 
-		replaceDomainInResponse(fullSubdomain, fullSubdomain+".snapscale", originalDomain, backupBuffer)
+		replaceDomainInResponse(fullSubdomain, fullSubdomain+"-snapscale", originalDomain, backupBuffer)
 
 		for key, value := range backupHeaders {
 			w.Header().Set(key, value)
@@ -98,7 +98,7 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replaceDomainInResponse(fullSubdomain, fullSubdomain+".statescale", originalDomain, buffer)
+	replaceDomainInResponse(fullSubdomain, fullSubdomain+"-statescale", originalDomain, buffer)
 	for key, value := range headers {
 		w.Header().Set(key, value)
 	}

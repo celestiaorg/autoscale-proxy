@@ -65,21 +65,30 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subdomain := hostParts[0] // Extract original domain
-	originalDomain := strings.Join(hostParts[1:], ".")
+	var subdomain, originalDomain, fullSubdomain string
+	subdomain = hostParts[0] // Extract first part of domain
+
+	if hostParts[1] != "lunaroasis" {
+		// If there's an additional subdomain (e.g. kepler)
+		originalDomain = strings.Join(hostParts[1:], ".")
+		fullSubdomain = subdomain + "." + hostParts[1]
+	} else {
+		originalDomain = strings.Join(hostParts[1:], ".")
+		fullSubdomain = subdomain
+	}
 
 	buffer := new(bytes.Buffer)
 	backupBuffer := new(bytes.Buffer)
 
-	debugLog.Printf("Proxying request to %s", subdomain+".statescale")
-	statusCode, headers, err := proxyRequest(subdomain+".statescale", r.RequestURI, buffer, r)
+	debugLog.Printf("Proxying request to %s", fullSubdomain+".statescale")
+	statusCode, headers, err := proxyRequest(fullSubdomain+".statescale", r.RequestURI, buffer, r)
 	debugLog.Printf("Received status code %d", statusCode)
 	if err != nil || statusCode >= 400 {
-		debugLog.Printf("Proxying request to %s", subdomain+".snapscale")
-		backupStatusCode, backupHeaders, _ := proxyRequest(subdomain+".snapscale", r.RequestURI, backupBuffer, r)
+		debugLog.Printf("Proxying request to %s", fullSubdomain+".snapscale")
+		backupStatusCode, backupHeaders, _ := proxyRequest(fullSubdomain+".snapscale", r.RequestURI, backupBuffer, r)
 		debugLog.Printf("Received status code %d", backupStatusCode)
 
-		replaceDomainInResponse(subdomain, subdomain+".snapscale", originalDomain, backupBuffer)
+		replaceDomainInResponse(fullSubdomain, fullSubdomain+".snapscale", originalDomain, backupBuffer)
 
 		for key, value := range backupHeaders {
 			w.Header().Set(key, value)
@@ -89,13 +98,14 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	replaceDomainInResponse(subdomain, subdomain+".statescale", originalDomain, buffer)
+	replaceDomainInResponse(fullSubdomain, fullSubdomain+".statescale", originalDomain, buffer)
 	for key, value := range headers {
 		w.Header().Set(key, value)
 	}
 	w.WriteHeader(statusCode)
 	io.Copy(w, buffer)
 }
+
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	handleHttpRequest(w, r)
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/gorilla/websocket"
 )
 
 var (
@@ -30,9 +31,6 @@ func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain
 	replacedBody := strings.ReplaceAll(body, fullReplace, fullOriginal)
 	buffer.Reset()
 	buffer.WriteString(replacedBody)
-
-	// Logging for troubleshooting
-	debugLog.Printf("fullReplace: %s, fullOriginal: %s", fullReplace, fullOriginal)
 }
 
 func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Request) (int, map[string]string, error) {
@@ -70,6 +68,7 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 
 func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	infoLog.Printf("Received request from %s", r.Host)
+
 	hostParts := strings.Split(r.Host, ".")
 	if len(hostParts) < 3 {
 		errorLog.Printf("Invalid domain: %s", r.Host)
@@ -79,6 +78,13 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 
 	subdomain := hostParts[0] // Extract original domain
 	originalDomain := strings.Join(hostParts[1:], ".")
+
+	// Check for WebSocket upgrade headers
+	if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
+		// Handle WebSocket requests by proxying to snapscale
+		proxyWebSocketRequest(subdomain, w, r)
+		return
+	}
 
 	buffer := new(bytes.Buffer)
 	backupBuffer := new(bytes.Buffer)
@@ -115,6 +121,65 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		buffer = compressBrotli(buffer)
 	}
 	io.Copy(w, buffer)
+}
+
+var upgrader = websocket.Upgrader{} // use default options
+
+func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Request) {
+	// Build target URL
+	fullSubdomain := subdomain + "-snapscale"
+	target := "wss://" + fullSubdomain + ".lunaroasis.net" + r.RequestURI
+
+	// Create a new WebSocket connection to the target
+	dialer := websocket.Dialer{}
+	targetConn, _, err := dialer.Dial(target, nil)
+	if err != nil {
+		errorLog.Printf("Failed to connect to target: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer targetConn.Close()
+
+	// Upgrade the client connection to a WebSocket connection
+	clientConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		errorLog.Printf("Failed to upgrade client connection: %v", err)
+		return // No need to send an error response, Upgrade already did if there was an error
+	}
+	defer clientConn.Close()
+
+	// Start goroutines to copy data between the client and target
+	go func() {
+		for {
+			messageType, message, err := targetConn.ReadMessage()
+			if err != nil {
+				errorLog.Printf("Failed to read from target: %v", err)
+				return
+			}
+			err = clientConn.WriteMessage(messageType, message)
+			if err != nil {
+				errorLog.Printf("Failed to write to client: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			messageType, message, err := clientConn.ReadMessage()
+			if err != nil {
+				errorLog.Printf("Failed to read from client: %v", err)
+				return
+			}
+			err = targetConn.WriteMessage(messageType, message)
+			if err != nil {
+				errorLog.Printf("Failed to write to target: %v", err)
+				return
+			}
+		}
+	}()
+
+	// The goroutines will run until one of the connections is closed
+	select {}
 }
 
 func compressBrotli(buffer *bytes.Buffer) *bytes.Buffer {

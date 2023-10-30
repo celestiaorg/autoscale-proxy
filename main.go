@@ -60,6 +60,9 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		}
 	}
 
+	debugLog.Printf("Received headers: %v", headers)
+	debugLog.Printf("Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
+
 	if resp.Header.Get("Content-Encoding") == "br" {
 		// Decompress Brotli data
 		decompressedData := brotli.NewReader(resp.Body)

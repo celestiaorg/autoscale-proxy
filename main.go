@@ -2,14 +2,13 @@ package main
 
 import (
 	"bytes"
+	"github.com/andybalholm/brotli"
+	"github.com/gorilla/websocket"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-
-	"github.com/andybalholm/brotli"
-	"github.com/gorilla/websocket"
 )
 
 var (
@@ -31,6 +30,8 @@ func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain
 	replacedBody := strings.ReplaceAll(body, fullReplace, fullOriginal)
 	buffer.Reset()
 	buffer.WriteString(replacedBody)
+
+	debugLog.Printf("Replaced %s with %s in response", fullReplace, fullOriginal)
 }
 
 func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Request) (int, map[string]string, error) {
@@ -123,7 +124,11 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, buffer)
 }
 
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all connections
+	},
+}
 
 func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Request) {
 	// Build target URL
@@ -132,9 +137,16 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 
 	// Create a new WebSocket connection to the target
 	dialer := websocket.Dialer{}
-	targetConn, _, err := dialer.Dial(target, nil)
+	targetConn, resp, err := dialer.Dial(target, nil)
 	if err != nil {
 		errorLog.Printf("Failed to connect to target: %v", err)
+		if resp != nil {
+			errorLog.Printf("Handshake response status: %s", resp.Status)
+			// Log all response headers for debugging
+			for k, v := range resp.Header {
+				errorLog.Printf("%s: %s", k, v)
+			}
+		}
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

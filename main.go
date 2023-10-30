@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
-	"github.com/andybalholm/brotli"
-	"github.com/gorilla/websocket"
+	"compress/flate"
+	"compress/gzip"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/andybalholm/brotli"
+	"github.com/gorilla/websocket"
 )
 
 var (
@@ -30,12 +33,6 @@ func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain
 	replacedBody := strings.ReplaceAll(body, fullReplace, fullOriginal)
 	buffer.Reset()
 	buffer.WriteString(replacedBody)
-
-	debugLog.Printf("--------------------")
-	debugLog.Printf(body)
-	debugLog.Printf("--------------------")
-	debugLog.Printf(replacedBody)
-	debugLog.Printf("--------------------")
 }
 
 func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Request) (int, map[string]string, error) {
@@ -60,16 +57,25 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		}
 	}
 
-	debugLog.Printf("Received headers: %v", headers)
-	debugLog.Printf("Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
-
-	if resp.Header.Get("Content-Encoding") == "br" {
+	encoding := resp.Header.Get("Content-Encoding")
+	var reader io.Reader
+	switch encoding {
+	case "br":
 		// Decompress Brotli data
-		decompressedData := brotli.NewReader(resp.Body)
-		io.Copy(buffer, decompressedData)
-	} else {
-		io.Copy(buffer, resp.Body)
+		reader = brotli.NewReader(resp.Body)
+	case "gzip":
+		// Decompress Gzip data
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return 0, nil, err
+		}
+	case "deflate":
+		// Decompress Deflate data
+		reader = flate.NewReader(resp.Body)
+	default:
+		reader = resp.Body
 	}
+	io.Copy(buffer, reader)
 
 	return resp.StatusCode, headers, nil
 }
@@ -111,10 +117,8 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(key, value)
 		}
 		w.WriteHeader(backupStatusCode)
-		// If the original response was Brotli-compressed, recompress the data
-		if headers["Content-Encoding"] == "br" {
-			buffer = compressBrotli(buffer)
-		}
+		encoding := headers["Content-Encoding"]
+		buffer = compressData(buffer, encoding)
 		io.Copy(w, backupBuffer)
 		return
 	}
@@ -125,9 +129,8 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(statusCode)
 	// If the original response was Brotli-compressed, recompress the data
-	if headers["Content-Encoding"] == "br" {
-		buffer = compressBrotli(buffer)
-	}
+	encoding := headers["Content-Encoding"]
+	buffer = compressData(buffer, encoding)
 	io.Copy(w, buffer)
 }
 
@@ -201,9 +204,19 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 	select {}
 }
 
-func compressBrotli(buffer *bytes.Buffer) *bytes.Buffer {
+func compressData(buffer *bytes.Buffer, encoding string) *bytes.Buffer {
 	var compressedData bytes.Buffer
-	writer := brotli.NewWriterLevel(&compressedData, brotli.DefaultCompression)
+	var writer io.WriteCloser
+	switch encoding {
+	case "br":
+		writer = brotli.NewWriterLevel(&compressedData, brotli.DefaultCompression)
+	case "gzip":
+		writer = gzip.NewWriter(&compressedData)
+	case "deflate":
+		writer, _ = flate.NewWriter(&compressedData, flate.DefaultCompression)
+	default:
+		return buffer
+	}
 	io.Copy(writer, buffer)
 	writer.Close()
 	return &compressedData

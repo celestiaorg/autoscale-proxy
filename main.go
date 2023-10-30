@@ -31,7 +31,11 @@ func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain
 	buffer.Reset()
 	buffer.WriteString(replacedBody)
 
-	debugLog.Printf("Replaced %s with %s in response", fullReplace, fullOriginal)
+	debugLog.Printf("--------------------")
+	debugLog.Printf(body)
+	debugLog.Printf("--------------------")
+	debugLog.Printf(replacedBody)
+	debugLog.Printf("--------------------")
 }
 
 func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Request) (int, map[string]string, error) {

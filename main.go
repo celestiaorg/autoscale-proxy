@@ -40,12 +40,14 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 	target := "https://" + fullSubdomain + ".lunaroasis.net" + path
 	newReq, err := http.NewRequest(r.Method, target, r.Body)
 	if err != nil {
+		errorLog.Printf("Failed to create request: %v", err)
 		return 0, nil, err
 	}
 	newReq.Header = r.Header
 
 	resp, err := client.Do(newReq)
 	if err != nil {
+		errorLog.Printf("Failed to send request: %v", err)
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
@@ -67,8 +69,8 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		// Decompress Gzip data
 		reader, err = gzip.NewReader(resp.Body)
 		if err != nil {
-			// continue with the original response
-			//return 0, nil, err
+			errorLog.Printf("Failed to create gzip reader: %v", err)
+			return 0, nil, err
 		}
 	case "deflate":
 		// Decompress Deflate data

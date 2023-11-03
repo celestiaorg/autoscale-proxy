@@ -67,7 +67,8 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		// Decompress Gzip data
 		reader, err = gzip.NewReader(resp.Body)
 		if err != nil {
-			return 0, nil, err
+			// continue with the original response
+			//return 0, nil, err
 		}
 	case "deflate":
 		// Decompress Deflate data

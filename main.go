@@ -5,25 +5,37 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/andybalholm/brotli"
 	"github.com/gorilla/websocket"
-)
-
-var (
-	debugLog *log.Logger
-	infoLog  *log.Logger
-	errorLog *log.Logger
+	"github.com/sirupsen/logrus"
 )
 
 func init() {
-	debugLog = log.New(os.Stdout, "DEBUG: ", log.Ldate|log.Ltime|log.Lshortfile)
-	infoLog = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
-	errorLog = log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+
+	switch logLevel {
+	case "debug":
+		logrus.SetLevel(logrus.DebugLevel)
+	case "info":
+		logrus.SetLevel(logrus.InfoLevel)
+	case "warning":
+		logrus.SetLevel(logrus.WarnLevel)
+	case "error":
+		logrus.SetLevel(logrus.ErrorLevel)
+	default:
+		logrus.SetLevel(logrus.InfoLevel)
+	}
+
+	logrus.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+	})
 }
 
 func replaceDomainInResponse(originalSubdomain, replaceSubdomain, originalDomain string, buffer *bytes.Buffer) {
@@ -40,14 +52,14 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 	target := "https://" + fullSubdomain + ".lunaroasis.net" + path
 	newReq, err := http.NewRequest(r.Method, target, r.Body)
 	if err != nil {
-		errorLog.Printf("Failed to create request: %v", err)
+		logrus.Errorf("Failed to create request: %v", err)
 		return 0, nil, err
 	}
 	newReq.Header = r.Header
 
 	resp, err := client.Do(newReq)
 	if err != nil {
-		errorLog.Printf("Failed to send request: %v", err)
+		logrus.Errorf("Failed to send request: %v", err)
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
@@ -69,7 +81,7 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 		// Decompress Gzip data
 		reader, err = gzip.NewReader(resp.Body)
 		if err != nil {
-			errorLog.Printf("Failed to create gzip reader: %v", err)
+			logrus.Errorf("Failed to create gzip reader: %v", err)
 			return 0, nil, err
 		}
 	case "deflate":
@@ -84,11 +96,11 @@ func proxyRequest(fullSubdomain, path string, buffer *bytes.Buffer, r *http.Requ
 }
 
 func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
-	infoLog.Printf("Received request from %s", r.Host)
+	logrus.Infof("Received request from %s", r.Host)
 
 	hostParts := strings.Split(r.Host, ".")
 	if len(hostParts) < 3 {
-		errorLog.Printf("Invalid domain: %s", r.Host)
+		logrus.Errorf("Invalid domain: %s", r.Host)
 		http.Error(w, "Invalid domain", http.StatusBadRequest)
 		return
 	}
@@ -106,13 +118,13 @@ func handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	buffer := new(bytes.Buffer)
 	backupBuffer := new(bytes.Buffer)
 
-	debugLog.Printf("Proxying request to %s", subdomain+"-statescale")
+	logrus.Debugf("Proxying request to %s", subdomain+"-statescale")
 	statusCode, headers, err := proxyRequest(subdomain+"-statescale", r.RequestURI, buffer, r)
-	debugLog.Printf("Received status code %d", statusCode)
+	logrus.Debugf("Received status code %d", statusCode)
 	if err != nil || statusCode >= 400 {
-		debugLog.Printf("Proxying request to %s", subdomain+"-snapscale")
+		logrus.Debugf("Proxying request to %s", subdomain+"-snapscale")
 		backupStatusCode, backupHeaders, _ := proxyRequest(subdomain+"-snapscale", r.RequestURI, backupBuffer, r)
-		debugLog.Printf("Received status code %d", backupStatusCode)
+		logrus.Debugf("Received status code %d", backupStatusCode)
 
 		replaceDomainInResponse(subdomain, subdomain+"-snapscale", originalDomain, backupBuffer)
 
@@ -152,12 +164,12 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 	dialer := websocket.Dialer{}
 	targetConn, resp, err := dialer.Dial(target, nil)
 	if err != nil {
-		errorLog.Printf("Failed to connect to target: %v", err)
+		logrus.Errorf("Failed to connect to target: %v", err)
 		if resp != nil {
-			errorLog.Printf("Handshake response status: %s", resp.Status)
+			logrus.Errorf("Handshake response status: %s", resp.Status)
 			// Log all response headers for debugging
 			for k, v := range resp.Header {
-				errorLog.Printf("%s: %s", k, v)
+				logrus.Errorf("%s: %s", k, v)
 			}
 		}
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -168,7 +180,7 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 	// Upgrade the client connection to a WebSocket connection
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		errorLog.Printf("Failed to upgrade client connection: %v", err)
+		logrus.Errorf("Failed to upgrade client connection: %v", err)
 		return // No need to send an error response, Upgrade already did if there was an error
 	}
 	defer clientConn.Close()
@@ -178,12 +190,12 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 		for {
 			messageType, message, err := targetConn.ReadMessage()
 			if err != nil {
-				errorLog.Printf("Failed to read from target: %v", err)
+				logrus.Errorf("Failed to read from target: %v", err)
 				return
 			}
 			err = clientConn.WriteMessage(messageType, message)
 			if err != nil {
-				errorLog.Printf("Failed to write to client: %v", err)
+				logrus.Errorf("Failed to write to client: %v", err)
 				return
 			}
 		}
@@ -192,12 +204,12 @@ func proxyWebSocketRequest(subdomain string, w http.ResponseWriter, r *http.Requ
 		for {
 			messageType, message, err := clientConn.ReadMessage()
 			if err != nil {
-				errorLog.Printf("Failed to read from client: %v", err)
+				logrus.Errorf("Failed to read from client: %v", err)
 				return
 			}
 			err = targetConn.WriteMessage(messageType, message)
 			if err != nil {
-				errorLog.Printf("Failed to write to target: %v", err)
+				logrus.Errorf("Failed to write to target: %v", err)
 				return
 			}
 		}
@@ -230,7 +242,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	infoLog.Println("Starting server on :8080")
+	logrus.Info("Starting server on :8080")
 	http.HandleFunc("/", handleRequest)
 	http.ListenAndServe(":8080", nil)
 }
